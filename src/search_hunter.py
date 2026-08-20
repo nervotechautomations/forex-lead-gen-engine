@@ -24,7 +24,7 @@ ENGINES = [
 
 HANDLE_RE = re.compile(r"instagram\.com/([a-zA-Z0-9._]{2,30})/?")
 POST_PATH = ("p", "reel", "tv", "popular", "stories", "explore")  # skip
-SNIPPET_RE = re.compile(r"(\d+)\s*(?:likes|comments)?[^@]*?@([a-zA-Z0-9._]{2,30})")
+SNIPPET_RE = re.compile(r"(\d+)\s+(?:likes|comments)[^@\n]*?(?:-\s*|@)([a-zA-Z0-9._]{2,30})\b")
 
 
 def build_queries(categories: list, regions: list) -> list:
