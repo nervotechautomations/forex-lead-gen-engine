@@ -10,12 +10,15 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
 
-def fetch_profile(username: str):
+def fetch_profile(username: str, opener=None) -> str:
     req = urllib.request.Request(
         f"https://www.tiktok.com/@{username}",
         headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
     )
     try:
+        if opener is not None:
+            with opener.open(req, timeout=20) as r:
+                return r.read().decode("utf-8", "replace")
         with urllib.request.urlopen(req, timeout=20) as r:
             return r.read().decode("utf-8", "replace")
     except Exception as e:

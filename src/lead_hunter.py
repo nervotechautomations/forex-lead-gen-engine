@@ -80,6 +80,39 @@ def proxy_opener():
     })
     return urllib.request.build_opener(handler)
 
+def tt_fetch_proxy(username: str) -> str:
+    """Fetch a TikTok profile — proxy first (fresh IP avoids anti-bot walls),
+    fall back to direct."""
+    opener = proxy_opener()
+    if opener:
+        try:
+            body = tt_fetch(username, opener=opener)
+            if body and '"webapp.user-detail"' in body:
+                return body
+        except Exception:
+            pass
+        time.sleep(2)
+    try:
+        return tt_fetch(username)
+    except Exception:
+        return ""
+
+
+def tt_parse_proxy(html: str) -> dict:
+    return tt_parse(html)
+
+
+def verify_account(u: str) -> tuple:
+    """Try IG API (direct), then TikTok (proxy -> direct)."""
+    data = ig_profile(u)
+    if data and data.get("data", {}).get("user"):
+        return evaluate_ig(data)
+    pinfo = tt_parse_proxy(tt_fetch_proxy(u))
+    if pinfo:
+        return evaluate_tt(pinfo)
+    return "fetch_failed", None
+
+
 MIN_F, MAX_F, MIN_ENG, BATCH = 758, 100_000, 1.0, 7
 
 KEYWORDS = [
@@ -166,14 +199,13 @@ def extract_handles(html: str) -> set:
 
 # -------------------------------------------------------------- verify --
 def ig_profile(username: str):
+    """IG public API — DIRECT connection only. Webshare residential IPs are
+    pre-flagged by Instagram (HTTP 429), so routing through the proxy here
+    guarantees failure; the home IP still has intermittent access windows."""
     req = urllib.request.Request(
         f"https://i.instagram.com/api/v1/users/web_profile_info/?username={username}",
         headers={"User-Agent": UA, "x-ig-app-id": IG_APP_ID})
-    opener = proxy_opener()
     try:
-        if opener:
-            with opener.open(req, timeout=20) as r:
-                return json.loads(r.read())
         with urllib.request.urlopen(req, timeout=20) as r:
             return json.loads(r.read())
     except Exception:
@@ -373,19 +405,10 @@ def main() -> None:
     for u in pending[:6]:
         if u in st["sent"]:
             continue
-        # try IG API, then TikTok
-        data = ig_profile(u)
-        if data and data.get("data", {}).get("user"):
-            verdict, info = evaluate_ig(data)
-        else:
-            html = tt_fetch(u)
-            pinfo = tt_parse(html)
-            if pinfo:
-                verdict, info = evaluate_tt(pinfo)
-            else:
-                still.append(u)
-                continue
-        if verdict == "pass":
+        verdict, info = verify_account(u)
+        if verdict == "fetch_failed" or info is None:
+            still.append(u)
+        elif verdict == "pass":
             if u not in st["sent"]:
                 newly.append((u, info))
         else:
