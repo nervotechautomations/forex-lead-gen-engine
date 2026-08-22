@@ -368,12 +368,10 @@ def main() -> None:
         if verdict == "pass":
             if u not in st["sent"]:
                 newly.append((u, info))
-                st["sent"].append(u)
         else:
             st["rejected"][u] = verdict
         time.sleep(4)
     st["pending"] = [u for u in pending[6:]] + [u for u in still if u not in st["sent"]]
-    save_state(st)
 
     if newly:
         # only text when a full batch (or more) has accumulated; hold partial
@@ -381,8 +379,14 @@ def main() -> None:
         ready = list(st.get("ready", [])) + newly
         full, remainder = ready[: len(ready) // BATCH * BATCH], ready[len(ready) // BATCH * BATCH:]
         for i in range(0, len(full), BATCH):
-            send_batch(full[i:i + BATCH])
+            batch = full[i:i + BATCH]
+            send_batch(batch)
+            # mark sent ONLY after the text actually went out
+            for u, _ in batch:
+                if u not in st["sent"]:
+                    st["sent"].append(u)
         st["ready"] = remainder
+    save_state(st)
 
 
 if __name__ == "__main__":
