@@ -43,6 +43,26 @@ PHONE = os.environ.get("LEAD_PHONE", "+17864522224")
 # or a pool of proxies separated by commas:
 #   http://u:p@host1:port,http://u:p@host2:port
 # Each request picks the next proxy (round-robin) when a pool is given.
+# The value is read from ~/.hermes/.env (auto-loaded below) or the env.
+def _load_dotenv():
+    """Minimal .env loader — no dependencies."""
+    env_path = os.path.join(os.path.expanduser("~"), ".hermes", ".env")
+    try:
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except FileNotFoundError:
+        pass
+
+
+_load_dotenv()
 PROXY_URL = os.environ.get("PROXY_URL", "")
 PROXIES = [p.strip() for p in PROXY_URL.split(",") if p.strip()]
 
