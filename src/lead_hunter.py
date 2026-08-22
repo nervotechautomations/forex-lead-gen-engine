@@ -115,6 +115,9 @@ def verify_account(u: str) -> tuple:
 
 
 MIN_F, MAX_F, MIN_ENG, BATCH = 758, 100_000, 1.0, 7
+# how many candidates to verify per tick — higher = faster batch accumulation,
+# but more API pressure (keep 4s spacing to limit ban risk)
+VERIFY_PER_TICK = 10
 
 KEYWORDS = [
     # --- Prop firm / funding (core) ---
@@ -439,10 +442,10 @@ def main() -> None:
                 pending.append(h)
         time.sleep(4)
 
-    # --- VERIFY up to 6 per run (politely spaced) ---
+    # --- VERIFY up to VERIFY_PER_TICK per run (politely spaced) ---
     newly = []
     still = []
-    for u in pending[:6]:
+    for u in pending[:VERIFY_PER_TICK]:
         if u in st["sent"]:
             continue
         verdict, info = verify_account(u)
@@ -454,7 +457,7 @@ def main() -> None:
         else:
             st["rejected"][u] = verdict
         time.sleep(4)
-    st["pending"] = [u for u in pending[6:]] + [u for u in still if u not in st["sent"]]
+    st["pending"] = [u for u in pending[VERIFY_PER_TICK:]] + [u for u in still if u not in st["sent"]]
 
     if newly:
         # only text when a full batch (or more) has accumulated; hold partial
