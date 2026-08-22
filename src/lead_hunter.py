@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import time
+import unicodedata
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -116,18 +117,43 @@ def verify_account(u: str) -> tuple:
 MIN_F, MAX_F, MIN_ENG, BATCH = 758, 100_000, 1.0, 7
 
 KEYWORDS = [
+    # --- Prop firm / funding (core) ---
     "fondeo de cuentas", "cuentas fondeadas forex", "empresa de fondeo",
-    "prueba de fondeo", "señales de forex", "estrategias de trading",
-    "análisis técnico forex", "operar forex", "curso de trading gratis",
-    "trading para principiantes", "academia de trading", "trader rentable",
-    "vivir del trading", "trader profesional", "mentor de trading",
-    "trading en vivo", "forex mentor", "funded trader", "prop firm",
+    "prueba de fondeo", "desafío de fondeo", "desafio de fondeo",
+    "fases de fondeo", "pasar el challenge", "retiros de fondeo",
+    "payout fondeo", "cuenta fondeada", "prop firm español",
+    "prop firm challenge", "funded account", "funded trader",
+    # --- General forex ---
+    "señales de forex", "señales gratis forex", "senales forex",
+    "estrategias de trading", "análisis técnico forex", "analisis tecnico",
+    "operar forex", "broker de forex", "trading de divisas",
+    "copytrading", "copy trading", "grupo de trading", "telegram trading",
+    # --- Instruments / markets ---
+    "xauusd", "oro trading", "trading de oro", "indices sinteticos",
+    "índices sintéticos", "sintéticos trading", "nasdaq trading",
+    "eurusd trading", "day trading", "day trader", "gold signals",
+    # --- Learning / beginner ---
+    "curso de trading gratis", "trading para principiantes",
+    "academia de trading", "escuela de trading", "clases de trading",
+    "trading desde cero", "aprende trading", "aprender a hacer trading",
+    "trading en español", "psicotrading", "gestion de riesgo trading",
+    "gestor de capital", "asesor financiero trading",
+    "trading mentorship", "forex education", "forex signals",
+    # --- Lifestyle / aspirational ---
+    "trader rentable", "vivir del trading", "trader profesional",
+    "mentor de trading", "trading en vivo", "forex mentor",
+    "libertad financiera trading", "trading lifestyle", "mi vida como trader",
+    "trading community", "forex community",
 ]
-REGIONS = ["España", "México", "Colombia", "Argentina", "Miami", "Chile", "Perú", "Venezuela"]
+REGIONS = ["España", "México", "Colombia", "Argentina", "Miami", "Chile", "Perú", "Venezuela",
+           "República Dominicana", "Ecuador", "Guatemala", "Costa Rica", "Panamá",
+           "El Salvador", "Bolivia", "Uruguay", "Paraguay", "Puerto Rico", "Honduras"]
 
 BIO_KEYS = ["forex", "trading", "trader", "fondeo", "fondead", "señal", "senal",
             "divisas", "inversion", "inversión", "pip", "broker", "mercado",
-            "prop firm", "funded", "xauusd", "mt4", "cfd"]
+            "prop firm", "funded", "xauusd", "mt4", "cfd", "oro", "sintetico",
+            "sintético", "nasdaq", "eurusd", "gold", "payout", "challenge",
+            "copy", "day trading", "psicotrading"]
 FUTURES = ["futures", "futuros", "topstep", "apex", "ninjatrader", "tradovate",
            "myfundedfutures", "e-mini"]
 # non-es/en indicator words (common on spam/scam accounts in other languages)
@@ -302,6 +328,19 @@ FIRST_NAMES = {
     "emilio", "raul", "gabriel", "ricardo", "oscar", "victor", "julio",
     "gerard", "jonathan", "geudy", "yael", "yonaiker", "frank", "jean",
     "beker", "nebz", "derek", "sean", "kay", "gabriel", "mateo", "thomas",
+    "fatima", "sofia", "valentina", "camila", "lucia", "paula", "elena",
+    "isabel", "carmen", "rosa", "patricia", "veronica", "alejandra", "paulina",
+    "daniela", "fernanda", "natalia", "karla", "mariana", "valeria",
+    "antonella", "milagros", "rocio", "belen", "agustina", "julieta", "melina",
+    "candela", "damian", "matias", "nicolas", "facundo", "leandro", "gaston",
+    "sebastian", "rodrigo", "bruno", "agustin", "franco", "lucas",
+    # English
+    "james", "john", "michael", "robert", "william", "jason", "kevin",
+    "brian", "eric", "justin", "brandon", "tyler", "jordan", "cody", "tanner",
+    "sydney", "brittany", "ashley", "jennifer", "amanda", "stephanie",
+    "nicole", "heather", "michelle", "rebecca", "melissa", "kelly", "tiffany",
+    "vanessa", "destiny", "morgan", "hannah", "megan", "lauren", "kayla",
+    "jasmine", "samantha", "chelsea", "sierra", "brooklyn", "madison",
     # English
     "katrina", "sarah", "emily", "jessica", "laura", "maria", "ana", "sandra",
     "grace", "chantel", "kasper", "virgil", "niki", "samuel", "alli", "sodeeq",
@@ -324,7 +363,8 @@ def looks_like_person(full_name: str) -> bool:
     """Heuristic: is the display name a real person's name rather than a brand?"""
     if not full_name:
         return False
-    low = full_name.lower()
+    low = unicodedata.normalize("NFKD", full_name.lower())
+    low = "".join(c for c in low if not unicodedata.combining(c))  # strip accents
     words = [w.strip(" .,-•·|[]()🌟📈📉💹💰🔹🔸") for w in low.split()]
     words = [w for w in words if w]
     if not words:
