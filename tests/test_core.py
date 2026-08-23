@@ -6,7 +6,7 @@ import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from lead_verifier import evaluate, MIN_FOLLOWERS, MAX_FOLLOWERS
+from lead_verifier import evaluate, MIN_F, MAX_F
 from search_hunter import extract_handles
 
 
@@ -69,9 +69,9 @@ def test_snippet_mining():
 
 
 def test_boundaries():
-    assert MIN_FOLLOWERS == 758
-    assert MAX_FOLLOWERS == 100_000
-    assert MIN_FOLLOWERS < MAX_FOLLOWERS
+    assert MIN_F == 758
+    assert MAX_F == 100_000
+    assert MIN_F < MAX_F
     print("  ok filter bounds (758..100k)")
 
 
