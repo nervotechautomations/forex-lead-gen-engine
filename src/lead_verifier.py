@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """IG lead verifier — retries pending Forex lead accounts against IG public API,
 applies filters (758<=followers<20000, last post <=90d, eng rate >=1%, Spanish/forex),
-texts newly qualified leads to +17864522224 via imsg. Silent when nothing new."""
+texts newly qualified leads to the number in LEAD_PHONE via imsg. Silent when nothing new."""
 import json, os, subprocess, time, datetime, urllib.request
 
 UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36'
 STATE = os.path.expanduser('~/.hermes/scripts/ig_leads_state.json')
-PHONE = '+17864522224'
+PHONE = os.environ.get('LEAD_PHONE')  # required at send time; never hardcode a real number
 MIN_F, MAX_F, MAX_AGE_DAYS, MIN_ENG = 758, 100000, 90, 1.0
 KEYWORDS = ['forex','trading','trader','fondeo','fondead','señal','senal','divisas','inversion','inversión','pip','broker','mercado']
 EXCLUDE = ['futures','futuros','futuro trader','micro e-mini','e-mini','es futures','nq futures','topstep','apex trader','ninjatrader','tradovate','my funded futures','myfundedfutures']
@@ -14,13 +14,10 @@ EXCLUDE = ['futures','futuros','futuro trader','micro e-mini','e-mini','es futur
 def load_state():
     if os.path.exists(STATE):
         return json.load(open(STATE))
-    return {"pending": ["fondeapro","tradingfx.finance","besttfxsignals","trading_institucionalfx1",
-                        "radardeinversiones","vivirdeltrading.club","aston_trading","lacademiadetrading",
-                        "tradingbull22","neofondeo","xiomexcorp","piptradersofficial",
-                        "trader.funding.360","clubtradersfx","enigmatictrading","soniamillanfrx"],
-            "sent": ["tradingfx.finance","radardeinversiones","fondeapro","trading_institucionalfx1",
-                      "besttfxsignals","vivirdeltrading.club","jonathanreal_fx"],
-            "rejected": {}}
+    # Seed lists live in the local state file, never in source. This repo is
+    # public; committing target usernames would publish both who is being
+    # approached and who has already been contacted.
+    return {"pending": [], "sent": [], "rejected": {}}
 
 def fetch(u):
     req = urllib.request.Request(

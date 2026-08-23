@@ -1,65 +1,47 @@
 [
   {
-    "username": "daytrading.gold",
-    "platform": "tiktok",
-    "followers": "58.5k",
+    "username": "example.fxmentor",
+    "platform": "instagram",
+    "followers": "14.2k",
     "location": "Unknown",
-    "contact_method": "day-trading-gold.com",
+    "contact_method": "example-fxmentor.test",
     "verified": "live browser profile check",
-    "note": "Gold specialist; mentoria directa via site"
+    "note": "ILLUSTRATIVE SAMPLE \u2014 not a real account"
   },
   {
-    "username": "therichkid.cl",
+    "username": "demo_trading_edu",
     "platform": "instagram",
-    "followers": "27.8k",
-    "location": "Colombia/Panama/Costa Rica (travel highlights)",
-    "contact_method": "therichkid.cl",
-    "verified": "live browser profile check",
-    "note": "Sir Richie Rich — entrepreneur/trader, free signals community"
-  },
-  {
-    "username": "soniamillanfrx",
-    "platform": "instagram",
-    "followers": "13.4k",
-    "location": "Unknown",
-    "contact_method": "www.goldtrading.academy",
-    "verified": "live API check",
-    "note": "Sonia Millan — XAUUSD trader, 5+ years, YouTube weekly"
-  },
-  {
-    "username": "comandofrx",
-    "platform": "instagram",
-    "followers": "13.7k",
+    "followers": "9.6k",
     "location": "Unknown",
     "contact_method": "DM Only",
     "verified": "live browser profile check",
-    "note": "Julio Alcina — 64yo retired military, institutional forex trader, 46 yrs experience"
+    "note": "ILLUSTRATIVE SAMPLE \u2014 not a real account"
   },
   {
-    "username": "jeantalerotrader",
-    "platform": "instagram",
-    "followers": "10k",
-    "location": "Unknown",
-    "contact_method": "jeantalerotrader.com.co/el-metodo-4-15",
-    "verified": "live browser profile check",
-    "note": "8 years experience, YouTube free content, audited results"
-  },
-  {
-    "username": "abc_forex",
-    "platform": "instagram",
-    "followers": "8.4k",
-    "location": "Unknown",
-    "contact_method": "linktr.ee/abcforexacademy",
-    "verified": "live browser profile check",
-    "note": "Live NASDAQ/Forex sessions, volume-based trading, team account"
-  },
-  {
-    "username": "apjcapital",
+    "username": "sample.pipacademy",
     "platform": "tiktok",
-    "followers": "12.7k",
+    "followers": "31.4k",
     "location": "Unknown",
-    "contact_method": "PayoutApproved.com",
+    "contact_method": "sample-pipacademy.test",
     "verified": "live browser profile check",
-    "note": "Trading mentor, DDE model creator, 3,000+ students, prop firm payouts"
+    "note": "ILLUSTRATIVE SAMPLE \u2014 not a real account"
+  },
+  {
+    "username": "test_divisas_pro",
+    "platform": "instagram",
+    "followers": "11.8k",
+    "location": "Unknown",
+    "contact_method": "linktr.test/sample",
+    "verified": "live browser profile check",
+    "note": "ILLUSTRATIVE SAMPLE \u2014 not a real account"
+  },
+  {
+    "username": "placeholder.fxsignals",
+    "platform": "instagram",
+    "followers": "7.9k",
+    "location": "Unknown",
+    "contact_method": "DM Only",
+    "verified": "live browser profile check",
+    "note": "ILLUSTRATIVE SAMPLE \u2014 not a real account"
   }
 ]

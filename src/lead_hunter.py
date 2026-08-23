@@ -36,7 +36,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 IG_APP_ID = "936619743392459"
 STATE = os.path.join(HERE, "ig_leads_state.json")
-PHONE = os.environ.get("LEAD_PHONE", "+17864522224")
+PHONE = os.environ.get("LEAD_PHONE")  # set in ~/.hermes/.env — no real default
 
 # --- Proxy rotation support -------------------------------------------------
 # Set PROXY_URL to a rotating residential gateway, e.g.:
