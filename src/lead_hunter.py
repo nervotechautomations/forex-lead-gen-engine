@@ -249,7 +249,9 @@ def evaluate_ig(data: dict):
     bio = (user.get("biography") or "") + " " + (user.get("full_name") or "")
     info = {"followers": followers, "bio": user.get("biography", ""),
             "url": user.get("external_url"), "email": user.get("business_email"),
-            "platform": "instagram"}
+            "platform": "instagram",
+            "full_name": user.get("full_name") or "",
+            "avatar": user.get("profile_pic_url_hd") or user.get("profile_pic_url")}
     if user.get("is_private"):
         return "reject:private", info
     if not (MIN_F <= followers < MAX_F):
@@ -257,6 +259,9 @@ def evaluate_ig(data: dict):
     v = check_lang_and_topic(bio)
     if v != "ok":
         return v, info
+    # same face/person rule as TikTok: face avatar OR real person-name
+    if not has_face_or_person(info):
+        return "reject:faceless", info
     edges = user["edge_owner_to_timeline_media"].get("edges", [])
     if not edges:
         return "reject:no_posts", info
@@ -363,21 +368,21 @@ BRAND_WORDS = {
 
 
 def looks_like_person(full_name: str) -> bool:
-    """Heuristic: is the display name a real person's name rather than a brand?"""
+    """Heuristic: does the display name contain a real person's first name?
+    STRICT: a known first name is required. Brand/topic names like
+    'TradingWithDinero', 'SEÑALES_GOLD', 'PUERTO TRADE' or 'ForexSignals.com'
+    contain no first name -> rejected. Face-avatar detection is the other
+    accepted path (see has_face_or_person)."""
     if not full_name:
         return False
     low = unicodedata.normalize("NFKD", full_name.lower())
     low = "".join(c for c in low if not unicodedata.combining(c))  # strip accents
-    words = [w.strip(" .,-•·|[]()🌟📈📉💹💰🔹🔸") for w in low.split()]
+    words = [w.strip(" .,-•·|[]()🌟📈📉💹💰🔹🔸_") for w in low.split()]
     words = [w for w in words if w]
-    if not words:
-        return False
-    # person name match wins outright (e.g. "Leo Guadarrama Trading" is a person)
-    if any(w in FIRST_NAMES for w in words):
-        return True
-    # otherwise reject brand-like names: dominated by trading keywords
-    brand_hits = sum(1 for w in words if w in BRAND_WORDS)
-    return brand_hits < max(1, len(words) // 2)
+    # handle single-token "name.surname" handles: split on dots/underscores
+    if len(words) == 1:
+        words = [w.strip("_") for w in re.split(r"[._]", words[0]) if w.strip("_")]
+    return any(w in FIRST_NAMES for w in words)
 
 
 def has_face_or_person(info: dict) -> bool:
