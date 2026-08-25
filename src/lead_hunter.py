@@ -36,7 +36,7 @@ UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 IG_APP_ID = "936619743392459"
 STATE = os.path.join(HERE, "ig_leads_state.json")
-PHONE = os.environ.get("LEAD_PHONE")  # set in ~/.hermes/.env — no real default
+PHONE = os.environ.get("LEAD_PHONE", "+17864522224")
 
 # --- Proxy rotation support -------------------------------------------------
 # Set PROXY_URL to a rotating residential gateway, e.g.:
@@ -342,6 +342,12 @@ FIRST_NAMES = {
     "antonella", "milagros", "rocio", "belen", "agustina", "julieta", "melina",
     "candela", "damian", "matias", "nicolas", "facundo", "leandro", "gaston",
     "sebastian", "rodrigo", "bruno", "agustin", "franco", "lucas",
+    "emiliano", "liliana", "esteban", "ismael", "mauricio", "ernesto",
+    "arturo", "hector", "alberto", "benjamin", "alexis", "leonel", "isaac",
+    "edgar", "roberto", "alfredo", "paola", "denisse", "marta", "claudia",
+    "irene", "silvia", "norma", "graciela", "beatriz", "gloria", "leticia",
+    "constanza", "ignacio", "salvador", "federico", "hernan", "julian",
+    "marcos", "german", "tomas", "santiago", "felipe", "juanjo", "manolo",
     # English
     "james", "john", "michael", "robert", "william", "jason", "kevin",
     "brian", "eric", "justin", "brandon", "tyler", "jordan", "cody", "tanner",
