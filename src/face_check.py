@@ -52,10 +52,15 @@ def has_face(url_or_path: str):
         frontal = cv2.CascadeClassifier(cascade_dir + "haarcascade_frontalface_default.xml")
         profile = cv2.CascadeClassifier(cascade_dir + "haarcascade_profileface.xml")
         count = 0
+        h, w = gray.shape
+        # require the face to be a substantial part of the avatar (>=1/3 of the
+        # smaller dimension). Real people's avatars are mostly face; cartoon /
+        # stylized / logo avatars with a small face icon fail this threshold.
+        min_side = max(32, min(h, w) // 3)
         for cascade in (frontal, profile):
             faces = cascade.detectMultiScale(
                 gray, scaleFactor=1.1, minNeighbors=6,
-                minSize=(max(24, gray.shape[0] // 6), max(24, gray.shape[0] // 6)),
+                minSize=(min_side, min_side),
             )
             count += len(faces)
         return count > 0, count

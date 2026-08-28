@@ -35,6 +35,8 @@ FACE_CHECK_SCRIPT = os.path.join(HERE, "face_check.py")
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 IG_APP_ID = "936619743392459"
+VENV_PY = os.path.join(HERE, "venv", "bin", "python")
+FACE_CHECK_PY = os.path.join(HERE, "venv", "bin", "python")  # interpreter for face_check.py
 STATE = os.path.join(HERE, "ig_leads_state.json")
 PHONE = os.environ.get("LEAD_PHONE", "+17864522224")
 
@@ -103,14 +105,31 @@ def tt_parse_proxy(html: str) -> dict:
     return tt_parse(html)
 
 
-def verify_account(u: str) -> tuple:
-    """Try IG API (direct), then TikTok (proxy -> direct)."""
+def verify_account(u: str, cover_budget: list = None) -> tuple:
+    """IG API (direct) with post-thumbnail face gate; TikTok with cover gate.
+    Returns (verdict, info): 'retry' means unverifiable this tick (throttled)
+    -> caller keeps the account in pending.
+    cover_budget: optional shared list; when non-empty, decrement per cover
+    check and skip (return 'retry') once exhausted."""
     data = ig_profile(u)
     if data and data.get("data", {}).get("user"):
         return evaluate_ig(data)
     pinfo = tt_parse_proxy(tt_fetch_proxy(u))
     if pinfo:
-        return evaluate_tt(pinfo)
+        verdict, info = evaluate_tt(pinfo)
+        if verdict != "pass":
+            return verdict, info
+        # final gate: cover-based face verification (authoritative)
+        if cover_budget is not None:
+            if cover_budget and cover_budget[0] <= 0:
+                return "retry", None  # cover budget spent -> next tick
+            cover_budget[0] -= 1
+        cover = cover_face_verdict(u)
+        if cover == "pass":
+            return "pass", info
+        if cover == "reject:faceless":
+            return "reject:faceless", info
+        return "retry", None  # throttled/wall -> keep in pending
     return "fetch_failed", None
 
 
@@ -118,6 +137,9 @@ MIN_F, MAX_F, MIN_ENG, BATCH = 758, 100_000, 1.0, 7
 # how many candidates to verify per tick — higher = faster batch accumulation,
 # but more API pressure (keep 4s spacing to limit ban risk)
 VERIFY_PER_TICK = 10
+# TikTok cover checks are expensive AND throttle the logged-in session after
+# ~2-3 loads. Cap per tick; accounts that need covers wait for a later tick.
+COVER_CHECKS_PER_TICK = 2
 
 KEYWORDS = [
     # --- Prop firm / funding (core) ---
@@ -259,15 +281,17 @@ def evaluate_ig(data: dict):
     v = check_lang_and_topic(bio)
     if v != "ok":
         return v, info
-    # same face/person rule as TikTok: face avatar OR real person-name
-    if not has_face_or_person(info):
-        return "reject:faceless", info
     edges = user["edge_owner_to_timeline_media"].get("edges", [])
     if not edges:
         return "reject:no_posts", info
     last_ts = max(e["node"]["taken_at_timestamp"] for e in edges)
     if (time.time() - last_ts) / 86400 > 90:
         return "reject:stale", info
+    # FACE GATE: face-detect the most recent post thumbnails (the IG
+    # equivalent of TikTok cover verification — content evidence, not avatar).
+    thumbs = [e["node"].get("display_url") for e in edges[:4] if e["node"].get("display_url")]
+    if thumbs and not any_thumb_has_face(thumbs):
+        return "reject:faceless", info
     eng = sum(e["node"]["edge_liked_by"]["count"] + e["node"]["edge_media_to_comment"]["count"]
               for e in edges) / len(edges)
     rate = 100 * eng / max(followers, 1)
@@ -290,11 +314,9 @@ def evaluate_tt(info: dict):
     posts = info.get("posts") or 0
     if posts == 0:
         return "reject:no_posts", info
-    # FACE CHECK: TikTok leads must be face-content influencers or
-    # person-branded creators, not faceless chart/meme/logo accounts.
-    # Relaxed rule: face detected on avatar OR display name is a person's name.
-    if not has_face_or_person(info):
-        return "reject:faceless", info
+    # NOTE: face gate is NOT here — cover_face_verdict runs in verify_account
+    # as the final gate, only for candidates that pass all cheap filters
+    # (browser time is expensive and TikTok throttles).
     # engagement proxy: avg likes per video / followers (loose, uses lifetime totals)
     avg_likes = (info.get("total_likes") or 0) / posts
     rate = 100 * avg_likes / followers
@@ -302,6 +324,20 @@ def evaluate_tt(info: dict):
     if rate < MIN_ENG:
         return "reject:low_eng", info
     return "pass", info
+
+
+def any_thumb_has_face(thumb_urls: list) -> bool:
+    """Face-detect each post thumbnail via the venv face_check (any face = pass)."""
+    for u in thumb_urls:
+        try:
+            proc = subprocess.run(
+                [VENV_PY, FACE_CHECK_PY, "--json", u],
+                capture_output=True, text=True, timeout=30)
+            if proc.returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def has_face_avatar(avatar_url: str) -> bool:
@@ -391,12 +427,36 @@ def looks_like_person(full_name: str) -> bool:
     return any(w in FIRST_NAMES for w in words)
 
 
+def cover_face_verdict(username: str) -> str:
+    """Playwright cover-based face verification via tt_covers.py.
+    Returns 'pass' | 'reject:faceless' | 'retry' (throttled/unverifiable).
+    Uses the venv python (has playwright + opencv)."""
+    try:
+        proc = subprocess.run(
+            [VENV_PY, os.path.join(HERE, "tt_covers.py"), "--json", username],
+            capture_output=True, text=True, timeout=150)
+        for line in proc.stdout.strip().splitlines():
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            v = d.get("verdict")
+            if v == "face_content":
+                return "pass"
+            if v == "no_face_content":
+                return "reject:faceless"
+            return "retry"  # no_covers_found / error -> throttle or wall
+        return "retry"
+    except Exception:
+        return "retry"
+
+
 def has_face_or_person(info: dict) -> bool:
-    """Relaxed face rule: face on avatar OR person-name display name.
-    Brand/logos ('Forex Signals', 'Gold Trader') still rejected."""
-    if has_face_avatar(info.get("avatar")):
-        return True
-    return looks_like_person(info.get("full_name") or "")
+    """DEPRECATED avatar heuristic — kept only for reference. The authoritative
+    face gate is cover_face_verdict (video-content face detection). Avatar
+    checks proved unreliable in calibration (signals pages use real-photo
+    avatars; only ~19% precision)."""
+    return has_face_avatar(info.get("avatar") or "")
 
 
 def check_lang_and_topic(bio: str) -> str:
@@ -456,11 +516,12 @@ def main() -> None:
     # --- VERIFY up to VERIFY_PER_TICK per run (politely spaced) ---
     newly = []
     still = []
+    cover_budget = [COVER_CHECKS_PER_TICK]
     for u in pending[:VERIFY_PER_TICK]:
         if u in st["sent"]:
             continue
-        verdict, info = verify_account(u)
-        if verdict == "fetch_failed" or info is None:
+        verdict, info = verify_account(u, cover_budget)
+        if verdict in ("fetch_failed", "retry") or info is None:
             still.append(u)
         elif verdict == "pass":
             if u not in st["sent"]:
