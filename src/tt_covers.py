@@ -144,15 +144,16 @@ def _proxy_pool() -> list:
 _PROXY_RI = [0]
 
 
-def _launch():
-    """Launch Chrome with a FRESH temp profile + injected TikTok cookies +
-    rotating residential proxy (dodges the logged-in-session throttle).
+def _launch(use_proxy: bool = True):
+    """Launch Chrome with a FRESH temp profile + injected TikTok cookies.
+    use_proxy=True: rotating residential proxy (dodges IP throttle).
+    use_proxy=False: direct (dodges proxy-pool flags; home IP session).
     Returns (playwright, context, tmpdir)."""
     import tempfile
     from playwright.sync_api import sync_playwright
     p = sync_playwright().start()
     cookies = _load_tt_cookies()
-    pool = _proxy_pool()
+    pool = _proxy_pool() if use_proxy else []
     tmpdir = tempfile.mkdtemp(prefix="ttverify-")
     kwargs = dict(
         channel="chrome", headless=True,
@@ -177,63 +178,32 @@ def check_user(username: str, browser=None) -> dict:
     except ImportError:
         return {"username": username, "verdict": "error_no_playwright", "face": False}
     try:
-        p, ctx, tmpdir = _launch()
-        page = ctx.pages[0] if ctx.pages else ctx.new_page()
-        covers = []
-        captions = set()
-
-        def on_response(resp):
-            if "/api/post/item_list/" in resp.url and resp.status == 200:
-                try:
-                    data = resp.json()
-                    for it in (data.get("itemList") or []):
-                        v = it.get("video") or {}
-                        cover = v.get("cover") or v.get("dynamicCover")
-                        if cover:
-                            covers.append(cover)
-                        cap = (it.get("desc") or "").strip()
-                        if cap:
-                            captions.add(cap[:200])
-                except Exception:
-                    pass
-
-        page.on("response", on_response)
-        # retry: TikTok intermittently serves empty item_list under rapid loads
-        for attempt in range(3):
+        p, ctx, tmpdir = _launch(use_proxy=True)
+        result = _probe(ctx, username, tmpdir)
+        if not result.get("covers_found"):
+            # proxy pool flagged -> retry direct (home IP session may be fresh)
             try:
-                page.goto(f"https://www.tiktok.com/@{username}", timeout=25000,
-                          wait_until="domcontentloaded")
+                ctx.close()
             except Exception:
                 pass
-            page.wait_for_timeout(4000 + attempt * 1500)
-            for _ in range(4):
-                page.mouse.wheel(0, 800)
-                page.wait_for_timeout(900)
-            if covers:
-                break
-        ctx.close()
-        import shutil
-        shutil.rmtree(tmpdir, ignore_errors=True)
-        p.stop()
-
-        if not covers:
-            return {"username": username, "verdict": "no_covers_found",
-                    "face": False, "covers_found": 0, "covers_checked": 0, "detections": []}
-        seen, unique = set(), []
-        for c in covers:
-            if c not in seen:
-                seen.add(c)
-                unique.append(c)
-        result = covers_have_face(unique)
-        return {
-            "username": username,
-            "verdict": "face_content" if result["face"] else "no_face_content",
-            "face": result["face"],
-            "covers_found": len(unique),
-            "covers_checked": result["checked"],
-            "detections": result["detections"],
-            "captions": list(captions),
-        }
+            try:
+                p.stop()
+            except Exception:
+                pass
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            p2, ctx2, tmpdir2 = _launch(use_proxy=False)
+            result = _probe(ctx2, username, tmpdir2)
+            try:
+                ctx2.close()
+            except Exception:
+                pass
+            try:
+                p2.stop()
+            except Exception:
+                pass
+            shutil.rmtree(tmpdir2, ignore_errors=True)
+        return result
     except Exception as e:
         try:
             ctx.close()
@@ -249,6 +219,60 @@ def check_user(username: str, browser=None) -> dict:
         except Exception:
             pass
         return {"username": username, "verdict": "error", "error": str(e)[:120], "face": False}
+
+
+def _probe(ctx, username: str, tmpdir: str) -> dict:
+    """Load the profile, collect covers + captions, run the face check."""
+    page = ctx.pages[0] if ctx.pages else ctx.new_page()
+    covers = []
+    captions = set()
+
+    def on_response(resp):
+        if "/api/post/item_list/" in resp.url and resp.status == 200:
+            try:
+                data = resp.json()
+                for it in (data.get("itemList") or []):
+                    v = it.get("video") or {}
+                    cover = v.get("cover") or v.get("dynamicCover")
+                    if cover:
+                        covers.append(cover)
+                    cap = (it.get("desc") or "").strip()
+                    if cap:
+                        captions.add(cap[:200])
+            except Exception:
+                pass
+
+    page.on("response", on_response)
+    for attempt in range(3):
+        try:
+            page.goto(f"https://www.tiktok.com/@{username}", timeout=25000,
+                      wait_until="domcontentloaded")
+        except Exception:
+            pass
+        page.wait_for_timeout(4000 + attempt * 1500)
+        for _ in range(4):
+            page.mouse.wheel(0, 800)
+            page.wait_for_timeout(900)
+        if covers:
+            break
+    if not covers:
+        return {"username": username, "verdict": "no_covers_found",
+                "face": False, "covers_found": 0, "covers_checked": 0, "detections": []}
+    seen, unique = set(), []
+    for c in covers:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    result = covers_have_face(unique)
+    return {
+        "username": username,
+        "verdict": "face_content" if result["face"] else "no_face_content",
+        "face": result["face"],
+        "covers_found": len(unique),
+        "covers_checked": result["checked"],
+        "detections": result["detections"],
+        "captions": list(captions),
+    }
 
 
 if __name__ == "__main__":

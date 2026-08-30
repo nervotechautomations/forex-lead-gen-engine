@@ -132,6 +132,13 @@ def verify_account(u: str, cover_budget: list = None) -> tuple:
                 return "reject:not_forex", None
             if cc == "reject:other_language":
                 return "reject:other_language", None
+            if cc == "no_evidence":
+                # no forex/stock/crypto markers in content: require forex
+                # evidence in bio, else the account is unproven (e.g. trucking,
+                # lifestyle, generic money pages)
+                bio_blob = ((info.get("bio") or "") + " " + (info.get("full_name") or "")).lower()
+                if not any(k in bio_blob for k in FX_KEYS):
+                    return "reject:not_forex", None
             return "pass", info
         if cover == "reject:faceless":
             return "reject:faceless", None
@@ -188,7 +195,7 @@ BIO_KEYS = ["forex", "trading", "trader", "fondeo", "fondead", "señal", "senal"
 FUTURES = ["futures", "futuros", "topstep", "apex", "ninjatrader", "tradovate",
            "myfundedfutures", "e-mini"]
 # non-es/en indicator words (common on spam/scam accounts in other languages)
-OTHER_LANG = ["giao dịch", "kiến thức", "đồng hành", "je ", " vous ", "chaque",
+OTHER_LANG = ["giao dịch", "kiến thức", "đồng hành", "je suis", "je vais", " vous ", "chaque",
               "saya ", "belajar", "seputar", "tôi", "محترف", "تعلم", "vàng",
               "negozio", "apprendi",
               # German
@@ -197,7 +204,6 @@ OTHER_LANG = ["giao dịch", "kiến thức", "đồng hành", "je ", " vous ", 
               # Italian
               "imparo", "operare", "sognare", "inizia", "gratuitamente", "rimani",
               "amore", "fino alla fine",
-              # Portuguese
               "educação", "pesquisa", "mercado financeiro", "comunidade", "alunos",
               "estou", "dinheiro", "precisa", "mensagem", "esperança", "treinados",
               "aprenda", "investimentos",
@@ -210,7 +216,7 @@ STOCK_KEYS = ["accion", "acciones", "bolsa", "stocks", "stock ", "nasdaq", "sp50
               "trade de valor", "aktien", "buy hold", "chartanalyse", "dividend",
               "portfolio", "cartera"]
 # crypto-only markers
-CRYPTO_KEYS = ["crypto", "bitcoin", "btc", "eth ", "ethereum", "binance", "bybit",
+CRYPTO_KEYS = ["crypto", "cripto", "bitcoin", "btc", "eth ", "ethereum", "binance", "bybit",
                "mexc", "solana", "usdt", "altcoin", "memecoin", "web3"]
 # explicit forex markers (bio or captions)
 FX_KEYS = ["forex", " fx", "xauusd", "eurusd", "gbpusd", "usdjpy", "divisa", "divisas",
