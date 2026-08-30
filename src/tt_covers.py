@@ -17,6 +17,7 @@ Usage:
 Exit: 0 always (verdicts printed per account). "--json" prints JSON lines.
 """
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -94,48 +95,92 @@ def covers_have_face(urls: list, min_ratio: int = 4) -> dict:
     return {"face": any(d > 0 for d in detections), "checked": checked, "detections": detections}
 
 
-def _launch(browser=None):
-    """Launch Chrome (real binary), preferring the logged-in persistent profile."""
+def _load_tt_cookies() -> list:
+    """Read the logged-in TikTok cookies from the saved browser profile."""
+    import sqlite3
+    prof = os.path.expanduser("~/.hermes/tt_browser_profile/Default")
+    db_path = os.path.join(prof, "Network", "Cookies")
+    if not os.path.exists(db_path):
+        db_path = os.path.join(prof, "Cookies")
+    if not os.path.exists(db_path):
+        return []
+    db = sqlite3.connect(db_path)
+    rows = db.execute(
+        "SELECT host_key, name, value, path, expires_utc, is_secure FROM cookies "
+        "WHERE host_key LIKE '%tiktok%'").fetchall()
+    db.close()
+    cookies = []
+    for host, name, value, path, exp, secure in rows:
+        cookies.append({
+            "name": name, "value": value, "domain": host.lstrip("."), "path": path,
+            "expires": max(exp // 1000000 - 11644473600, 0), "secure": bool(secure),
+            "httpOnly": False,
+        })
+    return cookies
+
+
+def _proxy_pool() -> list:
+    """Parse PROXY_URL from ~/.hermes/.env into (server, username, password) tuples."""
+    env_path = os.path.expanduser("~/.hermes/.env")
+    pool = []
+    try:
+        for line in open(env_path):
+            if line.startswith("PROXY_URL="):
+                for entry in line.strip().split("=", 1)[1].split(","):
+                    entry = entry.strip()
+                    if not entry:
+                        continue
+                    # http://user:pass@host:port
+                    rest = entry.split("//", 1)[1]
+                    creds, hostport = rest.split("@", 1)
+                    user, pw = creds.split(":", 1)
+                    pool.append((f"http://{hostport}", user, pw))
+                break
+    except Exception:
+        pass
+    return pool
+
+
+_PROXY_RI = [0]
+
+
+def _launch():
+    """Launch Chrome with a FRESH temp profile + injected TikTok cookies +
+    rotating residential proxy (dodges the logged-in-session throttle).
+    Returns (playwright, context, tmpdir)."""
+    import tempfile
     from playwright.sync_api import sync_playwright
-    import os
-    profile = os.path.expanduser("~/.hermes/tt_browser_profile")
     p = sync_playwright().start()
-    if os.path.isdir(profile) and os.listdir(profile):
-        # logged-in session exists -> headless with the same cookies
-        ctx = p.chromium.launch_persistent_context(
-            profile, channel="chrome", headless=True,
-            viewport={"width": 1280, "height": 900}, locale="en-US",
-            args=["--disable-blink-features=AutomationControlled", "--no-sandbox"])
-        return p, ctx
-    # no session yet -> throwaway headless
-    b = p.chromium.launch(headless=True, channel="chrome",
-                          args=["--disable-blink-features=AutomationControlled", "--no-sandbox"])
-    return p, b
+    cookies = _load_tt_cookies()
+    pool = _proxy_pool()
+    tmpdir = tempfile.mkdtemp(prefix="ttverify-")
+    kwargs = dict(
+        channel="chrome", headless=True,
+        viewport={"width": 1280, "height": 900}, locale="en-US",
+        args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
+    )
+    if pool:
+        server, user, pw = pool[_PROXY_RI[0] % len(pool)]
+        _PROXY_RI[0] += 1
+        kwargs["proxy"] = {"server": server, "username": user, "password": pw}
+    ctx = p.chromium.launch_persistent_context(tmpdir, **kwargs)
+    if cookies:
+        ctx.add_cookies(cookies)
+    return p, ctx, tmpdir
 
 
 def check_user(username: str, browser=None) -> dict:
-    """Return verdict dict for one account. Pass a shared browser/context to reuse it."""
+    """Return verdict dict for one account. Each call uses a FRESH temp
+    profile + rotating proxy IP + injected login cookies (throttle-dodge)."""
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return {"username": username, "verdict": "error_no_playwright", "face": False}
-    own = False
-    if browser is None:
-        p, browser = _launch()
-        own = True
     try:
-        if hasattr(browser, "new_context"):  # plain Browser -> make a context
-            ctx = browser.new_context(
-                user_agent=UA,
-                viewport={"width": 1280, "height": 900},
-                locale="en-US",
-                extra_http_headers={"Accept-Language": "en-US,en;q=0.9"},
-            )
-            ctx.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
-        else:  # persistent context -> use as-is (already has cookies)
-            ctx = browser
+        p, ctx, tmpdir = _launch()
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         covers = []
+        captions = set()
 
         def on_response(resp):
             if "/api/post/item_list/" in resp.url and resp.status == 200:
@@ -146,6 +191,9 @@ def check_user(username: str, browser=None) -> dict:
                         cover = v.get("cover") or v.get("dynamicCover")
                         if cover:
                             covers.append(cover)
+                        cap = (it.get("desc") or "").strip()
+                        if cap:
+                            captions.add(cap[:200])
                 except Exception:
                     pass
 
@@ -163,13 +211,10 @@ def check_user(username: str, browser=None) -> dict:
                 page.wait_for_timeout(900)
             if covers:
                 break
-        if own:  # single-shot: close everything; shared: caller owns lifecycle
-            ctx.close()
-            try:
-                browser.close()
-            except Exception:
-                pass
-            p.stop()
+        ctx.close()
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        p.stop()
 
         if not covers:
             return {"username": username, "verdict": "no_covers_found",
@@ -187,20 +232,23 @@ def check_user(username: str, browser=None) -> dict:
             "covers_found": len(unique),
             "covers_checked": result["checked"],
             "detections": result["detections"],
+            "captions": list(captions),
         }
     except Exception as e:
         try:
             ctx.close()
         except Exception:
             pass
-        return {"username": username, "verdict": "error", "error": str(e)[:120], "face": False}
-    finally:
-        if own:
-            try:
-                browser.close()
-            except Exception:
-                pass
+        try:
+            import shutil
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+        try:
             p.stop()
+        except Exception:
+            pass
+        return {"username": username, "verdict": "error", "error": str(e)[:120], "face": False}
 
 
 if __name__ == "__main__":
@@ -209,23 +257,9 @@ if __name__ == "__main__":
     if not args:
         print("usage: tt_covers.py [--json] <username> [<username> ...]")
         sys.exit(2)
-    try:
-        p, browser = _launch()
-    except Exception as e:
-        print(json.dumps([{"username": a, "verdict": "error_launch", "error": str(e)[:120], "face": False} for a in args]))
-        sys.exit(1)
     results = []
     for u in args:
-        r = check_user(u, browser=browser)
+        r = check_user(u)
         results.append(r)
         print(json.dumps(r) if json_out else f"{r['verdict']:20s} {u} (covers={r.get('covers_found', 0)})")
-        time.sleep(2.5)
-    # close whatever _launch gave us (persistent context or Browser)
-    try:
-        browser.close()
-    except Exception:
-        try:
-            browser.contexts[0].close()
-        except Exception:
-            pass
-    p.stop()
+        time.sleep(2)

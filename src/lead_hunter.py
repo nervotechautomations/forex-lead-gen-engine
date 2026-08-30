@@ -124,11 +124,17 @@ def verify_account(u: str, cover_budget: list = None) -> tuple:
             if cover_budget and cover_budget[0] <= 0:
                 return "retry", None  # cover budget spent -> next tick
             cover_budget[0] -= 1
-        cover = cover_face_verdict(u)
+        cover, captions = cover_face_verdict(u)
         if cover == "pass":
+            # content-level market check: reject stock/crypto/non-ES-EN content
+            cc = caption_forex_check(captions)
+            if cc in ("reject:stocks", "reject:crypto"):
+                return "reject:not_forex", None
+            if cc == "reject:other_language":
+                return "reject:other_language", None
             return "pass", info
         if cover == "reject:faceless":
-            return "reject:faceless", info
+            return "reject:faceless", None
         return "retry", None  # throttled/wall -> keep in pending
     return "fetch_failed", None
 
@@ -184,7 +190,33 @@ FUTURES = ["futures", "futuros", "topstep", "apex", "ninjatrader", "tradovate",
 # non-es/en indicator words (common on spam/scam accounts in other languages)
 OTHER_LANG = ["giao dịch", "kiến thức", "đồng hành", "je ", " vous ", "chaque",
               "saya ", "belajar", "seputar", "tôi", "محترف", "تعلم", "vàng",
-              "negozio", "apprendi"]
+              "negozio", "apprendi",
+              # German
+              "aktien", "aktienmarkt", "lerne", "geld", "verdienen", "kostenlos",
+              "tradingview", "chartanalyse", "diese", "einfache", "tricks",
+              # Italian
+              "imparo", "operare", "sognare", "inizia", "gratuitamente", "rimani",
+              "amore", "fino alla fine",
+              # Portuguese
+              "educação", "pesquisa", "mercado financeiro", "comunidade", "alunos",
+              "estou", "dinheiro", "precisa", "mensagem", "esperança", "treinados",
+              "aprenda", "investimentos",
+              # French
+              "gagner", "apprendre", "argent", "trading en ligne", "vous apprend",
+              "formez", "devenir"]
+# stock/indices-only markers (not forex)
+STOCK_KEYS = ["accion", "acciones", "bolsa", "stocks", "stock ", "nasdaq", "sp500",
+              "s&p", "indices", "index ", "etf", "nyse", "dow jones", "value investing",
+              "trade de valor", "aktien", "buy hold", "chartanalyse", "dividend",
+              "portfolio", "cartera"]
+# crypto-only markers
+CRYPTO_KEYS = ["crypto", "bitcoin", "btc", "eth ", "ethereum", "binance", "bybit",
+               "mexc", "solana", "usdt", "altcoin", "memecoin", "web3"]
+# explicit forex markers (bio or captions)
+FX_KEYS = ["forex", " fx", "xauusd", "eurusd", "gbpusd", "usdjpy", "divisa", "divisas",
+           "pares", "pip", "pips", "mt4", "mt5", "fondeo", "fondeada", "fondeado",
+           "sintetico", "sintéticos", "oro trading", "trading de oro", "gold trading",
+           "broker", "tradingforex", "forextips", "trading forex"]
 
 HANDLE_RE = re.compile(r"(?:instagram\.com|tiktok\.com/@)/([a-zA-Z0-9._]{2,30})/?")
 SNIPPET_RE = re.compile(r"(\d+)\s+(?:likes|comments)[^@\n]*?(?:-\s*|@)([a-zA-Z0-9._]{2,30})\b")
@@ -427,10 +459,10 @@ def looks_like_person(full_name: str) -> bool:
     return any(w in FIRST_NAMES for w in words)
 
 
-def cover_face_verdict(username: str) -> str:
+def cover_face_verdict(username: str) -> tuple:
     """Playwright cover-based face verification via tt_covers.py.
-    Returns 'pass' | 'reject:faceless' | 'retry' (throttled/unverifiable).
-    Uses the venv python (has playwright + opencv)."""
+    Returns (verdict, captions): verdict is 'pass' | 'reject:faceless' | 'retry'
+    (throttled/unverifiable). Uses the venv python (has playwright + opencv)."""
     try:
         proc = subprocess.run(
             [VENV_PY, os.path.join(HERE, "tt_covers.py"), "--json", username],
@@ -442,13 +474,13 @@ def cover_face_verdict(username: str) -> str:
                 continue
             v = d.get("verdict")
             if v == "face_content":
-                return "pass"
+                return "pass", d.get("captions") or []
             if v == "no_face_content":
-                return "reject:faceless"
-            return "retry"  # no_covers_found / error -> throttle or wall
-        return "retry"
+                return "reject:faceless", []
+            return "retry", []  # no_covers_found / error -> throttle or wall
+        return "retry", []
     except Exception:
-        return "retry"
+        return "retry", []
 
 
 def has_face_or_person(info: dict) -> bool:
@@ -467,7 +499,28 @@ def check_lang_and_topic(bio: str) -> str:
         return "reject:not_forex"
     if any(w in low for w in OTHER_LANG):
         return "reject:other_language"
+    if any(w in low for w in STOCK_KEYS):
+        return "reject:not_forex"  # stocks/indices-only accounts excluded
+    if any(w in low for w in CRYPTO_KEYS):
+        return "reject:not_forex"  # crypto-only accounts excluded
     return "ok"
+
+
+def caption_forex_check(captions: list) -> str:
+    """Content-level market check on video captions.
+    Returns 'ok' | 'reject:stocks' | 'reject:crypto' | 'reject:other_language' | 'no_evidence'."""
+    if not captions:
+        return "no_evidence"
+    blob = " ".join(c.lower() for c in captions)
+    if any(w in blob for w in OTHER_LANG):
+        return "reject:other_language"
+    if any(w in blob for w in STOCK_KEYS):
+        return "reject:stocks"
+    if any(w in blob for w in CRYPTO_KEYS):
+        return "reject:crypto"
+    if any(w in blob for w in FX_KEYS):
+        return "ok"  # explicit forex signal in content
+    return "no_evidence"
 
 
 # ------------------------------------------------------------ delivery --
