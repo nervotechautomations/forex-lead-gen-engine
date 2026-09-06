@@ -96,7 +96,36 @@ def covers_have_face(urls: list, min_ratio: int = 4) -> dict:
 
 
 def _load_tt_cookies() -> list:
-    """Read the logged-in TikTok cookies from the saved browser profile."""
+    """Load the logged-in TikTok cookies: prefer the JSON captured at login
+    time (Chrome 152+ refuses to persist cookies to disk under automation),
+    fall back to reading the profile cookie DB."""
+    import json as _json
+    # 1) JSON capture (reliable)
+    json_path = os.path.expanduser("~/.hermes/tt_cookies.json")
+    if os.path.exists(json_path):
+        try:
+            cookies = _json.load(open(json_path))
+            if cookies:
+                norm = []
+                for c in cookies:
+                    if "tiktok" not in c.get("domain", ""):
+                        continue
+                    exp = c.get("expires", -1)
+                    norm.append({
+                        "name": c.get("name", ""),
+                        "value": c.get("value", ""),
+                        "domain": c.get("domain", "").lstrip("."),
+                        "path": c.get("path", "/"),
+                        "expires": exp if exp and exp > 0 else 4102444800,
+                        "secure": bool(c.get("secure", False)),
+                        "httpOnly": bool(c.get("httpOnly", False)),
+                        "sameSite": (c.get("sameSite") or "Lax").title(),
+                    })
+                if norm:
+                    return norm
+        except Exception:
+            pass
+    # 2) profile cookie DB fallback
     import sqlite3
     prof = os.path.expanduser("~/.hermes/tt_browser_profile/Default")
     db_path = os.path.join(prof, "Network", "Cookies")
@@ -107,7 +136,7 @@ def _load_tt_cookies() -> list:
     db = sqlite3.connect(db_path)
     rows = db.execute(
         "SELECT host_key, name, value, path, expires_utc, is_secure FROM cookies "
-        "WHERE host_key LIKE '%tiktok%'").fetchall()
+        "WHERE host_key LIKE '%tiktok%' AND length(value) > 0").fetchall()
     db.close()
     cookies = []
     for host, name, value, path, exp, secure in rows:
@@ -158,6 +187,8 @@ def _launch(use_proxy: bool = True):
     kwargs = dict(
         channel="chrome", headless=True,
         viewport={"width": 1280, "height": 900}, locale="en-US",
+        # never mock the keychain: real cookies must decrypt on disk
+        ignore_default_args=["--use-mock-keychain"],
         args=["--disable-blink-features=AutomationControlled", "--no-sandbox"],
     )
     if pool:

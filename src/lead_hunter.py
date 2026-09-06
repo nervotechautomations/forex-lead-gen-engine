@@ -210,9 +210,10 @@ OTHER_LANG = ["giao dịch", "kiến thức", "đồng hành", "je suis", "je va
               # French
               "gagner", "apprendre", "argent", "trading en ligne", "vous apprend",
               "formez", "devenir"]
-# stock/indices-only markers (not forex)
+# stock/indices-only markers (not forex) — NOTE: generic "indices/index" NOT
+# included: "índices sintéticos" (Deriv synthetics) is a forex-adjacent niche
 STOCK_KEYS = ["accion", "acciones", "bolsa", "stocks", "stock ", "nasdaq", "sp500",
-              "s&p", "indices", "index ", "etf", "nyse", "dow jones", "value investing",
+              "s&p", "etf", "nyse", "dow jones", "value investing",
               "trade de valor", "aktien", "buy hold", "chartanalyse", "dividend",
               "portfolio", "cartera"]
 # crypto-only markers
