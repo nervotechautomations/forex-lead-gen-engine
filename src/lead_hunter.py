@@ -146,7 +146,7 @@ def verify_account(u: str, cover_budget: list = None) -> tuple:
     return "fetch_failed", None
 
 
-MIN_F, MAX_F, MIN_ENG, BATCH = 758, 100_000, 1.0, 7
+MIN_F, MAX_F, MIN_ENG, BATCH = 758, 150_000, 1.0, 7
 # how many candidates to verify per tick — higher = faster batch accumulation,
 # but more API pressure (keep 4s spacing to limit ban risk)
 VERIFY_PER_TICK = 10
@@ -209,7 +209,10 @@ OTHER_LANG = ["giao dịch", "kiến thức", "đồng hành", "je suis", "je va
               "aprenda", "investimentos",
               # French
               "gagner", "apprendre", "argent", "trading en ligne", "vous apprend",
-              "formez", "devenir"]
+              "formez", "devenir",
+              # Nordic / other
+              "norge", "nybegynner", "dansk", "lær", "tjäna", "lära", "få pengar",
+              "kostenlos", "verdienen"]
 # stock/indices-only markers (not forex) — NOTE: generic "indices/index" NOT
 # included: "índices sintéticos" (Deriv synthetics) is a forex-adjacent niche
 STOCK_KEYS = ["accion", "acciones", "bolsa", "stocks", "stock ", "nasdaq", "sp500",
