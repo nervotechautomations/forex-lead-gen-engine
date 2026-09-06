@@ -21,11 +21,12 @@ PROFILE = os.path.expanduser("~/.hermes/tt_browser_profile")
 COOKIE_OUT = os.path.expanduser("~/.hermes/tt_cookies.json")
 
 
-def save_cookies(ctx) -> int:
+def save_cookies(ctx, out_path: str = None) -> int:
     """Write current tiktok cookies to the JSON file. Returns count saved."""
+    out_path = out_path or COOKIE_OUT
     try:
         cookies = [c for c in ctx.cookies() if "tiktok" in c.get("domain", "")]
-        with open(COOKIE_OUT, "w") as f:
+        with open(out_path, "w") as f:
             json.dump(cookies, f)
         return len(cookies)
     except Exception as e:
@@ -34,16 +35,23 @@ def save_cookies(ctx) -> int:
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--session", type=int, default=1, help="session number (1..5); each = separate login")
+    args = ap.parse_args()
+    n = args.session
+    PROFILE = os.path.expanduser(f"~/.hermes/tt_browser_profile{n if n > 1 else ''}")
+    COOKIE_OUT = os.path.expanduser(f"~/.hermes/tt_cookies{n if n > 1 else ''}.json")
     from playwright.sync_api import sync_playwright
     os.makedirs(PROFILE, exist_ok=True)
     # clear stale cookie capture
     if os.path.exists(COOKIE_OUT):
         os.remove(COOKIE_OUT)
     p = sync_playwright().start()
-    print("Opening TikTok in a real Chrome window (headful).", flush=True)
+    print(f"Opening TikTok login window (session {n})...", flush=True)
     print("1) Log in to TikTok in that window  (QR code or phone/email).", flush=True)
     print("2) After login, CLOSE the window — your session is saved.", flush=True)
-    print("Profile:", PROFILE, flush=True)
+    print(f"Profile: {PROFILE} -> {COOKIE_OUT}", flush=True)
     ctx = p.chromium.launch_persistent_context(
         PROFILE,
         channel="chrome",
@@ -56,7 +64,7 @@ def main():
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     page.goto("https://www.tiktok.com/login", wait_until="domcontentloaded")
     closed = False
-    page.on("close", lambda: closed or save_cookies(ctx))
+    page.on("close", lambda: closed or save_cookies(ctx, COOKIE_OUT))
     # capture cookies every 5s once the user is logged in; exit when the
     # window/page closes (poll in case the close event is missed)
     last_save = 0
@@ -71,7 +79,7 @@ def main():
         try:
             sess = [c for c in ctx.cookies() if c.get("name") == "sessionid" and c.get("value")]
             if sess and time.time() - last_save > 6:
-                n = save_cookies(ctx)
+                n = save_cookies(ctx, COOKIE_OUT)
                 last_save = time.time()
                 print(f"  cookies saved ({n})", flush=True)
         except Exception:
@@ -83,7 +91,7 @@ def main():
         except Exception:
             break
     # final capture before teardown
-    n = save_cookies(ctx)
+    n = save_cookies(ctx, COOKIE_OUT)
     ctx.close()
     p.stop()
     print(f"Done. {n} tiktok cookies -> {COOKIE_OUT}", flush=True)

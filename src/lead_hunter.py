@@ -105,32 +105,98 @@ def tt_parse_proxy(html: str) -> dict:
     return tt_parse(html)
 
 
+VERDICT_TTL = 7 * 86400        # cached final verdicts live 7 days
+RETRY_TTL = 45 * 60            # 'retry' accounts re-attempt after 45 min
+verdict_cache = {}             # u -> {verdict, ts, eng, fx}
+
+
+def cached_verdict(u: str):
+    """Return cached verdict entry if fresh, else None. 'retry' entries only
+    count as fresh for RETRY_TTL (they must be re-attempted, but not every tick)."""
+    e = verdict_cache.get(u)
+    if not e:
+        return None
+    age = time.time() - e.get("ts", 0)
+    if e["verdict"] == "retry":
+        return e if age < RETRY_TTL else None
+    return e if age < VERDICT_TTL else None
+
+
+def remember(u: str, verdict: str, eng=None, fx=None, followers=None) -> None:
+    verdict_cache[u] = {"verdict": verdict, "ts": time.time(),
+                        "eng": eng, "fx": fx, "followers": followers}
+
+
+def cached_info(e: dict) -> dict:
+    return {"followers": e.get("followers") or 0, "cached": True}
+
+
+def ig_cover_verdict(username: str) -> tuple:
+    """Logged-in IG verification via ig_covers.py (browser). Returns
+    (verdict, info): pass | reject:<reason> | retry. Used when the anonymous
+    IG API is throttled — the logged-in browser path dodges the home-IP cap."""
+    try:
+        proc = subprocess.run(
+            [VENV_PY, os.path.join(HERE, "ig_covers.py"), "--json", username],
+            capture_output=True, text=True, timeout=150)
+        for line in proc.stdout.strip().splitlines():
+            try:
+                d = json.loads(line)
+            except Exception:
+                continue
+            v = d.get("verdict")
+            if v == "pass":
+                info = {"followers": d.get("followers") or 0,
+                        "bio": d.get("bio") or "", "full_name": d.get("full_name") or "",
+                        "platform": "instagram",
+                        "eng_rate": d.get("eng_rate"),
+                        "captions": d.get("captions") or []}
+                return "pass", info
+            if v and v.startswith("reject:"):
+                return v, {"followers": d.get("followers") or 0}
+            return "retry", None
+        return "retry", None
+    except Exception:
+        return "retry", None
+
+
 def verify_account(u: str, cover_budget: list = None) -> tuple:
     """IG API (direct) with post-thumbnail face gate; TikTok with cover gate.
     Returns (verdict, info): 'retry' means unverifiable this tick (throttled)
     -> caller keeps the account in pending.
     cover_budget: optional shared list; when non-empty, decrement per cover
     check and skip (return 'retry') once exhausted."""
+    hit = cached_verdict(u)
+    if hit:
+        if hit["verdict"] == "retry":
+            return "retry", None
+        return hit["verdict"], cached_info(hit)
     data = ig_profile(u)
     if data and data.get("data", {}).get("user"):
-        return evaluate_ig(data)
+        verdict, info = evaluate_ig(data)
+        if verdict != "retry" and not verdict.startswith("fetch"):
+            remember(u, verdict, followers=info.get("followers"))
+        return verdict, info
     pinfo = tt_parse_proxy(tt_fetch_proxy(u))
     if pinfo:
         verdict, info = evaluate_tt(pinfo)
         if verdict != "pass":
+            remember(u, verdict)
             return verdict, info
         # final gate: cover-based face verification (authoritative)
         if cover_budget is not None:
             if cover_budget and cover_budget[0] <= 0:
                 return "retry", None  # cover budget spent -> next tick
             cover_budget[0] -= 1
-        cover, captions = cover_face_verdict(u)
+        cover, captions, real_eng = cover_face_verdict(u)
         if cover == "pass":
             # content-level market check: reject stock/crypto/non-ES-EN content
             cc = caption_forex_check(captions)
             if cc in ("reject:stocks", "reject:crypto"):
+                remember(u, "reject:not_forex", real_eng, followers=info.get("followers"))
                 return "reject:not_forex", None
             if cc == "reject:other_language":
+                remember(u, "reject:other_language", real_eng, followers=info.get("followers"))
                 return "reject:other_language", None
             if cc == "no_evidence":
                 # no forex/stock/crypto markers in content: require forex
@@ -138,11 +204,59 @@ def verify_account(u: str, cover_budget: list = None) -> tuple:
                 # lifestyle, generic money pages)
                 bio_blob = ((info.get("bio") or "") + " " + (info.get("full_name") or "")).lower()
                 if not any(k in bio_blob for k in FX_KEYS):
+                    remember(u, "reject:not_forex", real_eng, followers=info.get("followers"))
                     return "reject:not_forex", None
+            # REAL engagement gate: median per-video like-rate when the cover
+            # probe captured video stats; fall back to the lifetime proxy.
+            eff_eng = real_eng if real_eng is not None else info.get("eng_rate")
+            if eff_eng is not None and eff_eng < MIN_ENG:
+                remember(u, "reject:low_eng", real_eng, followers=info.get("followers"))
+                return "reject:low_eng", None
+            info["eng_rate"] = eff_eng
+            remember(u, "pass", real_eng, followers=info.get("followers"))
             return "pass", info
         if cover == "reject:faceless":
+            remember(u, "reject:faceless", real_eng, followers=info.get("followers"))
             return "reject:faceless", None
+        remember(u, "retry", real_eng, followers=info.get("followers"))
         return "retry", None  # throttled/wall -> keep in pending
+    # IG API throttled AND no TikTok profile -> IG-only account: try the
+    # logged-in browser path (needs ig_login.py once).
+    if cover_budget is not None:
+        if cover_budget and cover_budget[0] <= 0:
+            return "retry", None
+        cover_budget[0] -= 1
+    iverd, iinfo = ig_cover_verdict(u)
+    if iverd != "retry":
+        if iverd != "pass":
+            remember(u, iverd, followers=(iinfo or {}).get("followers"))
+            return iverd, iinfo
+        # apply the same gates as TikTok: followers range, bio language/topic,
+        # content forex evidence, real engagement
+        followers = (iinfo or {}).get("followers") or 0
+        if not (MIN_F <= followers < MAX_F):
+            remember(u, f"reject:followers={followers}", followers=followers)
+            return f"reject:followers={followers}", iinfo
+        bio_blob = (((iinfo or {}).get("bio") or "") + " "
+                    + ((iinfo or {}).get("full_name") or "")).lower()
+        v = check_lang_and_topic(bio_blob)
+        if v != "ok":
+            remember(u, v, followers=followers)
+            return v, iinfo
+        cc = caption_forex_check((iinfo or {}).get("captions") or [])
+        if cc in ("reject:stocks", "reject:crypto", "reject:other_language"):
+            reason = "reject:not_forex" if cc != "reject:other_language" else cc
+            remember(u, reason, followers=followers)
+            return reason, iinfo
+        if cc == "no_evidence" and not any(k in bio_blob for k in FX_KEYS):
+            remember(u, "reject:not_forex", followers=followers)
+            return "reject:not_forex", iinfo
+        eng = (iinfo or {}).get("eng_rate")
+        if eng is not None and eng < MIN_ENG:
+            remember(u, "reject:low_eng", followers=followers)
+            return "reject:low_eng", iinfo
+        remember(u, "pass", followers=followers)
+        return "pass", iinfo
     return "fetch_failed", None
 
 
@@ -359,11 +473,14 @@ def evaluate_tt(info: dict):
     # NOTE: face gate is NOT here — cover_face_verdict runs in verify_account
     # as the final gate, only for candidates that pass all cheap filters
     # (browser time is expensive and TikTok throttles).
-    # engagement proxy: avg likes per video / followers (loose, uses lifetime totals)
+    # engagement: prefer the REAL per-video median like-rate captured by the
+    # cover probe (verify_account). Here, only hard-reject accounts that are
+    # clearly dead (<10% of MIN_ENG by the lifetime proxy) so we don't waste
+    # cover budget on them; the authoritative gate runs at cover stage.
     avg_likes = (info.get("total_likes") or 0) / posts
     rate = 100 * avg_likes / followers
     info["eng_rate"] = round(rate, 2)
-    if rate < MIN_ENG:
+    if rate < MIN_ENG * 0.1:
         return "reject:low_eng", info
     return "pass", info
 
@@ -471,8 +588,9 @@ def looks_like_person(full_name: str) -> bool:
 
 def cover_face_verdict(username: str) -> tuple:
     """Playwright cover-based face verification via tt_covers.py.
-    Returns (verdict, captions): verdict is 'pass' | 'reject:faceless' | 'retry'
-    (throttled/unverifiable). Uses the venv python (has playwright + opencv)."""
+    Returns (verdict, captions, eng): verdict is 'pass' | 'reject:faceless'
+    | 'retry'; captions for the content forex gate; eng = real per-video
+    median like-rate (%) or None."""
     try:
         proc = subprocess.run(
             [VENV_PY, os.path.join(HERE, "tt_covers.py"), "--json", username],
@@ -483,14 +601,15 @@ def cover_face_verdict(username: str) -> tuple:
             except Exception:
                 continue
             v = d.get("verdict")
+            eng = d.get("median_eng_rate")
             if v == "face_content":
-                return "pass", d.get("captions") or []
+                return "pass", d.get("captions") or [], eng
             if v == "no_face_content":
-                return "reject:faceless", []
-            return "retry", []  # no_covers_found / error -> throttle or wall
-        return "retry", []
+                return "reject:faceless", [], eng
+            return "retry", [], eng  # no_covers_found / error -> throttle or wall
+        return "retry", [], None
     except Exception:
-        return "retry", []
+        return "retry", [], None
 
 
 def has_face_or_person(info: dict) -> bool:
@@ -556,7 +675,28 @@ def send_batch(leads: list) -> None:
 # ----------------------------------------------------------------- main --
 def main() -> None:
     st = load_state()
+    global verdict_cache
+    verdict_cache.update(st.get("verdicts", {}) or {})
     pending = [u for u in st.get("pending", []) if u not in st["sent"]]
+
+    # --- QA feedback: apply user validations to state (learning loop) ---
+    qa = st.get("qa", {}) or {}
+    changed = False
+    for u, rec in list(qa.items()):
+        if rec.get("applied"):
+            continue
+        label = rec.get("label")
+        if label == "invalid":
+            reason = rec.get("reason") or "reject:user_qa"
+            for bucket in ("sent", "ready"):
+                st[bucket] = [x for x in st[bucket]
+                              if (x[0] if isinstance(x, list) else x) != u]
+            st.setdefault("rejected", {})[u] = reason
+            verdict_cache[u] = {"verdict": reason, "ts": time.time(), "eng": None}
+            changed = True
+        rec["applied"] = True
+    if changed:
+        save_state(st)
 
     # --- HUNT: rotate queries ---
     qidx = st.get("qidx", 0)
@@ -607,8 +747,31 @@ def main() -> None:
                 if u not in st["sent"]:
                     st["sent"].append(u)
         st["ready"] = remainder
+    st["verdicts"] = {u: e for u, e in verdict_cache.items()
+                      if e.get("ts", 0) > time.time() - VERDICT_TTL}
     save_state(st)
 
 
 if __name__ == "__main__":
+    import argparse
+    ap = argparse.ArgumentParser(description="Forex lead hunter (hunt+verify+text) or QA feedback")
+    ap.add_argument("--qa-valid", nargs="*", default=None, help="mark accounts user-validated (learning loop)")
+    ap.add_argument("--qa-invalid", nargs="*", default=None, help="mark accounts user-rejected, e.g. --qa-invalid foo bar")
+    ap.add_argument("--qa-reason", default="reject:user_qa", help="reason for --qa-invalid")
+    ap.add_argument("--qa-show", action="store_true", help="show pending QA entries")
+    args = ap.parse_args()
+    if args.qa_valid or args.qa_invalid or args.qa_show:
+        st = load_state()
+        qa = st.setdefault("qa", {})
+        if args.qa_show:
+            for u, rec in qa.items():
+                print(f"  {u:28s} {rec.get('label','?'):8s} {rec.get('reason',''):24s} applied={rec.get('applied')}")
+        for u in args.qa_valid or []:
+            qa[u] = {"label": "valid", "ts": time.time(), "applied": False}
+        for u in args.qa_invalid or []:
+            qa[u] = {"label": "invalid", "reason": args.qa_reason, "ts": time.time(), "applied": False}
+        save_state(st)
+        print(f"QA entries: {sum(1 for r in qa.values() if r.get('applied'))} applied, "
+              f"{sum(1 for r in qa.values() if not r.get('applied'))} pending")
+        sys.exit(0)
     main()

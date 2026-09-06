@@ -95,13 +95,18 @@ def covers_have_face(urls: list, min_ratio: int = 4) -> dict:
     return {"face": any(d > 0 for d in detections), "checked": checked, "detections": detections}
 
 
-def _load_tt_cookies() -> list:
-    """Load the logged-in TikTok cookies: prefer the JSON captured at login
-    time (Chrome 152+ refuses to persist cookies to disk under automation),
-    fall back to reading the profile cookie DB."""
+def _load_tt_cookies(session: int = 1) -> list:
+    """Load logged-in TikTok cookies for session N (rotation). Prefer the JSON
+    captured at login time (Chrome 152+ refuses to persist cookies to disk
+    under automation), fall back to the profile cookie DB."""
     import json as _json
-    # 1) JSON capture (reliable)
-    json_path = os.path.expanduser("~/.hermes/tt_cookies.json")
+    # 1) JSON capture (reliable) — rotate across tt_cookies[2,3..].json
+    paths = [os.path.expanduser("~/.hermes/tt_cookies.json")]
+    for i in range(2, 6):
+        alt = os.path.expanduser(f"~/.hermes/tt_cookies{i}.json")
+        if os.path.exists(alt):
+            paths.append(alt)
+    json_path = paths[(session - 1) % len(paths)]
     if os.path.exists(json_path):
         try:
             cookies = _json.load(open(json_path))
@@ -173,7 +178,7 @@ def _proxy_pool() -> list:
 _PROXY_RI = [0]
 
 
-def _launch(use_proxy: bool = True):
+def _launch(use_proxy: bool = True, cookies: list = None):
     """Launch Chrome with a FRESH temp profile + injected TikTok cookies.
     use_proxy=True: rotating residential proxy (dodges IP throttle).
     use_proxy=False: direct (dodges proxy-pool flags; home IP session).
@@ -181,7 +186,8 @@ def _launch(use_proxy: bool = True):
     import tempfile
     from playwright.sync_api import sync_playwright
     p = sync_playwright().start()
-    cookies = _load_tt_cookies()
+    if cookies is None:
+        cookies = _load_tt_cookies()
     pool = _proxy_pool() if use_proxy else []
     tmpdir = tempfile.mkdtemp(prefix="ttverify-")
     kwargs = dict(
@@ -201,7 +207,7 @@ def _launch(use_proxy: bool = True):
     return p, ctx, tmpdir
 
 
-def check_user(username: str, browser=None) -> dict:
+def check_user(username: str, browser=None, session: int = 1) -> dict:
     """Return verdict dict for one account. Each call uses a FRESH temp
     profile + rotating proxy IP + injected login cookies (throttle-dodge)."""
     try:
@@ -209,7 +215,8 @@ def check_user(username: str, browser=None) -> dict:
     except ImportError:
         return {"username": username, "verdict": "error_no_playwright", "face": False}
     try:
-        p, ctx, tmpdir = _launch(use_proxy=True)
+        cookies = _load_tt_cookies(session)
+        p, ctx, tmpdir = _launch(use_proxy=True, cookies=cookies)
         result = _probe(ctx, username, tmpdir)
         if not result.get("covers_found"):
             # proxy pool flagged -> retry direct (home IP session may be fresh)
@@ -223,7 +230,7 @@ def check_user(username: str, browser=None) -> dict:
                 pass
             import shutil
             shutil.rmtree(tmpdir, ignore_errors=True)
-            p2, ctx2, tmpdir2 = _launch(use_proxy=False)
+            p2, ctx2, tmpdir2 = _launch(use_proxy=False, cookies=cookies)
             result = _probe(ctx2, username, tmpdir2)
             try:
                 ctx2.close()
@@ -257,6 +264,7 @@ def _probe(ctx, username: str, tmpdir: str) -> dict:
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     covers = []
     captions = set()
+    stats = []  # per-video (likes, views) for real engagement
 
     def on_response(resp):
         if "/api/post/item_list/" in resp.url and resp.status == 200:
@@ -270,6 +278,9 @@ def _probe(ctx, username: str, tmpdir: str) -> dict:
                     cap = (it.get("desc") or "").strip()
                     if cap:
                         captions.add(cap[:200])
+                    st = it.get("stats") or {}
+                    if st.get("diggCount") is not None:
+                        stats.append((st.get("diggCount", 0), st.get("playCount", 0)))
             except Exception:
                 pass
 
@@ -295,6 +306,16 @@ def _probe(ctx, username: str, tmpdir: str) -> dict:
             seen.add(c)
             unique.append(c)
     result = covers_have_face(unique)
+    # real per-video engagement (median like-rate) when stats available
+    median_rate = None
+    if stats:
+        rates = []
+        for likes, views in stats:
+            if views > 0:
+                rates.append(100.0 * likes / views)
+        if rates:
+            rates.sort()
+            median_rate = round(rates[len(rates) // 2], 2)
     return {
         "username": username,
         "verdict": "face_content" if result["face"] else "no_face_content",
@@ -303,18 +324,28 @@ def _probe(ctx, username: str, tmpdir: str) -> dict:
         "covers_checked": result["checked"],
         "detections": result["detections"],
         "captions": list(captions),
+        "videos": len(stats),
+        "median_eng_rate": median_rate,  # % of views that like, median across recent videos
     }
 
 
 if __name__ == "__main__":
     args = [a for a in sys.argv[1:] if a != "--json"]
     json_out = "--json" in sys.argv
+    session = 1
+    if "--session" in args:
+        i = args.index("--session")
+        try:
+            session = int(args[i + 1])
+        except Exception:
+            pass
+        del args[i:i + 2]
     if not args:
-        print("usage: tt_covers.py [--json] <username> [<username> ...]")
-        sys.exit(2)
+        print("usage: tt_covers.py [--json] [--session N] <username> [<username>...]")
+        sys.exit(1)
     results = []
     for u in args:
-        r = check_user(u)
+        r = check_user(u, session=session)
         results.append(r)
         print(json.dumps(r) if json_out else f"{r['verdict']:20s} {u} (covers={r.get('covers_found', 0)})")
         time.sleep(2)
